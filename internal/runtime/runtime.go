@@ -3,7 +3,8 @@
 package runtime
 
 import (
-	"archive/zip"
+	"archive/tar"
+	"compress/gzip"
 	"context"
 	"fmt"
 	"io"
@@ -17,17 +18,23 @@ import (
 )
 
 // ServerBuild pins the llama.cpp release used for the prebuilt macOS arm64 binary.
-const ServerBuild = "b4823"
+// Recent macOS arm64 releases ship a .tar.gz whose llama-server links sibling
+// *.dylib files via @rpath/@loader_path, so the whole archive must be extracted
+// together (not just the binary). This build is recent enough for current model
+// architectures and is verified to launch on Apple Silicon (Metal).
+const ServerBuild = "b9592"
 
 // BinaryOptions configures resolution of the llama-server binary.
 type BinaryOptions struct {
 	CacheDir string // default ~/.cache/autoresearch/bin
 	Confirm  func(sizeGB float64) bool
-	Download func(url, dst string) error // returns the downloaded zip path content at dst
+	Download func(url, dst string) error // downloads url to dst
 }
 
-// ResolveBinary returns a path to a llama-server binary, downloading+unzipping the
-// pinned llama.cpp macOS arm64 release on first use (after confirmation).
+// ResolveBinary returns a path to a llama-server binary, downloading and extracting
+// the pinned llama.cpp macOS arm64 release on first use (after confirmation). The
+// whole archive is extracted into a per-build directory so llama-server sits beside
+// the sibling *.dylib files it loads via @rpath/@loader_path.
 func ResolveBinary(o BinaryOptions) (string, error) {
 	cache := o.CacheDir
 	if cache == "" {
@@ -37,11 +44,11 @@ func ResolveBinary(o BinaryOptions) (string, error) {
 		}
 		cache = filepath.Join(home, ".cache", "autoresearch", "bin")
 	}
-	if err := os.MkdirAll(cache, 0o755); err != nil {
+	install := filepath.Join(cache, ServerBuild)
+	if err := os.MkdirAll(install, 0o755); err != nil {
 		return "", err
 	}
-	bin := filepath.Join(cache, "llama-server")
-	if _, err := os.Stat(bin); err == nil {
+	if bin := findServer(install); bin != "" {
 		return bin, nil
 	}
 	confirm := o.Confirm
@@ -51,50 +58,86 @@ func ResolveBinary(o BinaryOptions) (string, error) {
 	if !confirm(0.05) {
 		return "", fmt.Errorf("llama-server not present and download declined")
 	}
-	url := fmt.Sprintf("https://github.com/ggml-org/llama.cpp/releases/download/%s/llama-%s-bin-macos-arm64.zip", ServerBuild, ServerBuild)
-	zipPath := filepath.Join(cache, "llama.zip")
+	url := fmt.Sprintf("https://github.com/ggml-org/llama.cpp/releases/download/%s/llama-%s-bin-macos-arm64.tar.gz", ServerBuild, ServerBuild)
+	archive := filepath.Join(cache, "llama-"+ServerBuild+"-macos-arm64.tar.gz")
 	download := o.Download
 	if download == nil {
 		download = httpDownload
 	}
-	if err := download(url, zipPath); err != nil {
+	if err := download(url, archive); err != nil {
 		return "", fmt.Errorf("download llama-server: %w", err)
 	}
-	if err := unzipServer(zipPath, cache); err != nil {
+	if err := extractTarGz(archive, install); err != nil {
 		return "", err
 	}
-	if _, err := os.Stat(bin); err != nil {
-		return "", fmt.Errorf("llama-server not found after unzip")
+	bin := findServer(install)
+	if bin == "" {
+		return "", fmt.Errorf("llama-server not found after extracting %s", archive)
 	}
 	return bin, nil
 }
 
-// unzipServer extracts the archive and places a llama-server executable at dir/llama-server.
-func unzipServer(zipPath, dir string) error {
-	r, err := zip.OpenReader(zipPath)
+// findServer walks dir for a regular file named llama-server and returns its path.
+func findServer(dir string) string {
+	var found string
+	_ = filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+		if err != nil || found != "" {
+			return nil
+		}
+		if !info.IsDir() && info.Name() == "llama-server" {
+			found = path
+		}
+		return nil
+	})
+	return found
+}
+
+// extractTarGz extracts every regular file from a .tar.gz into dir, preserving the
+// archive's internal layout and executable bits, with path-traversal protection.
+func extractTarGz(archive, dir string) error {
+	f, err := os.Open(archive)
 	if err != nil {
 		return err
 	}
-	defer r.Close()
-	for _, f := range r.File {
-		if !strings.HasSuffix(f.Name, "llama-server") {
-			continue
-		}
-		rc, err := f.Open()
-		if err != nil {
-			return err
-		}
-		out, err := os.OpenFile(filepath.Join(dir, "llama-server"), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
-		if err != nil {
-			rc.Close()
-			return err
-		}
-		_, cErr := io.Copy(out, rc)
-		rc.Close()
-		out.Close()
-		return cErr
+	defer f.Close()
+	gz, err := gzip.NewReader(f)
+	if err != nil {
+		return err
 	}
-	return fmt.Errorf("llama-server entry not found in %s", zipPath)
+	defer gz.Close()
+	tr := tar.NewReader(gz)
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(dir, hdr.Name)
+		if !strings.HasPrefix(target, filepath.Clean(dir)+string(os.PathSeparator)) {
+			return fmt.Errorf("unsafe path in archive: %s", hdr.Name)
+		}
+		switch hdr.Typeflag {
+		case tar.TypeDir:
+			if err := os.MkdirAll(target, 0o755); err != nil {
+				return err
+			}
+		case tar.TypeReg:
+			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+				return err
+			}
+			out, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, os.FileMode(hdr.Mode)&0o777)
+			if err != nil {
+				return err
+			}
+			if _, err := io.Copy(out, tr); err != nil {
+				out.Close()
+				return err
+			}
+			out.Close()
+		}
+	}
 }
 
 func httpDownload(url, dst string) error {
