@@ -34,7 +34,9 @@ func TestEndToEndConverges(t *testing.T) {
 	// Fake server: parse current value out of the prompt, return half of it.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
-			Messages []struct{ Content string `json:"content"` } `json:"messages"`
+			Messages []struct {
+				Content string `json:"content"`
+			} `json:"messages"`
 		}
 		_ = json.NewDecoder(r.Body).Decode(&req)
 		cur := 16.0

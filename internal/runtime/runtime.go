@@ -21,7 +21,7 @@ const ServerBuild = "b4823"
 
 // BinaryOptions configures resolution of the llama-server binary.
 type BinaryOptions struct {
-	CacheDir string             // default ~/.cache/autoresearch/bin
+	CacheDir string // default ~/.cache/autoresearch/bin
 	Confirm  func(sizeGB float64) bool
 	Download func(url, dst string) error // returns the downloaded zip path content at dst
 }
