@@ -3,4 +3,5 @@ models/
 *.gguf
 /ar
 bin/
+dist/
 .claude/worktrees/

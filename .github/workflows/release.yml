@@ -1,0 +1,218 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      force_update:
+        description: 'Force version update'
+        required: false
+        default: 'false'
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  semantic-release:
+    runs-on: ubuntu-latest
+    outputs:
+      new_version: ${{ steps.uplift.outputs.new_version }}
+      version_changed: ${{ steps.uplift.outputs.version_changed }}
+    steps:
+      - name: Generate GitHub App Token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ vars.GH_PUB_APP_CLIENT_ID }}
+          private-key: ${{ secrets.GH_PUB_APP_PEM }}
+
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          token: ${{ steps.app-token.outputs.token }}
+
+      - name: Setup Uplift
+        uses: gembaadvantage/uplift-action@v2
+        with:
+          version: latest
+          install-only: true
+          args: version
+
+      - name: Run Uplift
+        id: uplift
+        run: |
+          BEFORE_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+          uplift release --fetch-all --skip-changelog
+          AFTER_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+
+          if [ -n "$AFTER_TAG" ] && [ "$AFTER_TAG" != "$BEFORE_TAG" ]; then
+            echo "new_version=$AFTER_TAG" >> $GITHUB_OUTPUT
+            echo "version_changed=true" >> $GITHUB_OUTPUT
+          else
+            echo "No version change, skipping release"
+            echo "version_changed=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Generate Changelog
+        if: steps.uplift.outputs.version_changed == 'true'
+        uses: orhun/git-cliff-action@v4
+        with:
+          config: .cliff.toml
+          args: --verbose --current
+        env:
+          OUTPUT: CHANGELOG.md
+          GITHUB_REPO: ${{ github.repository }}
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+
+      - name: Commit Changelog
+        if: steps.uplift.outputs.version_changed == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add CHANGELOG.md
+          git commit -m "docs: update changelog for ${{ steps.uplift.outputs.new_version }}" || echo "No changes to commit"
+          git push origin main || echo "No changes to push"
+
+  build:
+    needs: semantic-release
+    if: needs.semantic-release.outputs.version_changed == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        # macOS Apple Silicon only — the managed runtime (llama-server on Metal)
+        # supports darwin/arm64 today. Add GOOS/GOARCH rows as platforms land,
+        # and mirror them in the Homebrew formula.
+        include:
+          - goos: darwin
+            goarch: arm64
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Fetch Tags
+        run: |
+          git fetch --tags --force
+          git describe --tags --abbrev=0
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+          cache: false
+
+      - name: Build Binary
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          VERSION="${{ needs.semantic-release.outputs.new_version }}"
+          COMMIT="${{ github.sha }}"
+          BUILD_DATE="$(date -u '+%Y-%m-%d_%H:%M:%S')"
+          PKG="github.com/dobbo-ca/autoresearch/internal/version"
+
+          LDFLAGS="-X ${PKG}.Version=${VERSION} -X ${PKG}.Commit=${COMMIT} -X ${PKG}.Date=${BUILD_DATE}"
+
+          OUTPUT="karp-${{ matrix.goos }}-${{ matrix.goarch }}"
+          go build -ldflags "${LDFLAGS}" -o "${OUTPUT}" ./cmd/ar
+
+          echo "Built: ${OUTPUT}"
+          ls -lh "${OUTPUT}"
+
+      - name: Create Archive
+        run: |
+          VERSION="${{ needs.semantic-release.outputs.new_version }}"
+
+          BINARY="karp-${{ matrix.goos }}-${{ matrix.goarch }}"
+          ARCHIVE="autoresearch-${VERSION}-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz"
+          # Archive the binary under its installed name, 'karp'.
+          cp "${BINARY}" "karp"
+          tar czf "${ARCHIVE}" "karp"
+          rm "karp"
+
+          # Generate SHA256
+          shasum -a 256 "${ARCHIVE}" | awk '{print $1}' > "${ARCHIVE}.sha256"
+
+          echo "Created: ${ARCHIVE}"
+          cat "${ARCHIVE}.sha256"
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: autoresearch-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: |
+            autoresearch-*.tar.gz
+            autoresearch-*.tar.gz.sha256
+
+  release:
+    needs: [semantic-release, build]
+    if: needs.semantic-release.outputs.version_changed == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Download All Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Prepare Release Assets
+        run: |
+          mkdir -p release-assets
+          find artifacts -type f \( -name "*.tar.gz" -o -name "*.sha256" \) -exec cp {} release-assets/ \;
+          ls -lh release-assets/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.semantic-release.outputs.new_version }}
+          name: ${{ needs.semantic-release.outputs.new_version }}
+          body_path: CHANGELOG.md
+          files: release-assets/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  update-homebrew:
+    needs: [semantic-release, release]
+    if: needs.semantic-release.outputs.version_changed == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Generate GitHub App Token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ vars.GH_PUB_APP_CLIENT_ID }}
+          private-key: ${{ secrets.GH_PUB_APP_PEM }}
+          owner: dobbo-ca
+          repositories: homebrew-taps
+
+      - name: Download All Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Extract SHA256 Checksums
+        id: checksums
+        run: |
+          mkdir -p checksums
+          find artifacts -name "*.sha256" -exec cp {} checksums/ \;
+          echo "darwin_arm64=$(cat checksums/autoresearch-*-darwin-arm64.tar.gz.sha256)" >> $GITHUB_OUTPUT
+
+      - name: Trigger Homebrew Tap Update
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          repository: dobbo-ca/homebrew-taps
+          event-type: update-formula
+          client-payload: |
+            {
+              "formula": "autoresearch",
+              "version": "${{ needs.semantic-release.outputs.new_version }}",
+              "darwin_arm64_sha": "${{ steps.checksums.outputs.darwin_arm64 }}"
+            }
