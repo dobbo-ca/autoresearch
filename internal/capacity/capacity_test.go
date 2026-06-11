@@ -10,9 +10,9 @@ func TestSelectTier(t *testing.T) {
 		{8, "qwen2.5-coder-7b"},
 		{16, "qwen2.5-coder-7b"},
 		{24, "qwen2.5-coder-14b"},
-		{32, "qwen3.6-27b"},
-		{64, "qwen3.6-27b"},
-		{128, "qwen3.6-27b"},
+		{32, "qwen2.5-coder-32b"},
+		{64, "qwen2.5-coder-32b"},
+		{128, "qwen2.5-coder-32b"},
 	}
 	for _, c := range cases {
 		if got := SelectTier(c.gb).ID; got != c.want {
