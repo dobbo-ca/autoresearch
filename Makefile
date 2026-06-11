@@ -10,7 +10,7 @@ test:
 	go test ./...
 
 build:
-	go build $(LDFLAGS) -o bin/ar ./cmd/ar
+	go build $(LDFLAGS) -o bin/karp ./cmd/ar
 
 # Cross-build release archives. The managed runtime is macOS Apple Silicon
 # (Metal) only today; add more GOOS/GOARCH pairs here as platforms are
@@ -22,9 +22,9 @@ dist: clean
 	@for p in $(PLATFORMS); do \
 		os=$${p%/*}; arch=$${p#*/}; \
 		echo "building $$os/$$arch..."; \
-		GOOS=$$os GOARCH=$$arch go build $(LDFLAGS) -o dist/ar ./cmd/ar; \
-		tar -C dist -czf dist/autoresearch-$(VERSION)-$$os-$$arch.tar.gz ar; \
-		rm dist/ar; \
+		GOOS=$$os GOARCH=$$arch go build $(LDFLAGS) -o dist/karp ./cmd/ar; \
+		tar -C dist -czf dist/autoresearch-$(VERSION)-$$os-$$arch.tar.gz karp; \
+		rm dist/karp; \
 	done
 	@ls -lh dist/
 

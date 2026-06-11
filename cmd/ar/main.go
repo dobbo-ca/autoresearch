@@ -1,4 +1,4 @@
-// Command ar runs the autoresearch optimization loop.
+// Command karp runs the autoresearch optimization loop.
 package main
 
 import (
@@ -22,7 +22,7 @@ func main() {
 	case "report":
 		err = cmdReport(os.Args[2:])
 	case "version", "-v", "--version":
-		fmt.Println("ar", version.String())
+		fmt.Println("karp", version.String())
 	default:
 		usage()
 		os.Exit(2)
@@ -34,11 +34,11 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, `ar — autoresearch optimization loop
+	fmt.Fprintln(os.Stderr, `karp — autoresearch optimization loop
 
 Usage:
-  ar init      scaffold a 3-file project (instructions/asset/scorer)
-  ar run       run the overnight loop (downloads + launches the model)
-  ar report    render report.md from rounds.jsonl
-  ar version   print version`)
+  karp init      scaffold a 3-file project (instructions/asset/scorer)
+  karp run       run the overnight loop (downloads + launches the model)
+  karp report    render report.md from rounds.jsonl
+  karp version   print version`)
 }

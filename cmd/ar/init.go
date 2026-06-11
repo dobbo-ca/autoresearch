@@ -87,7 +87,7 @@ history_window = 8
 		}
 		fmt.Printf("wrote %s\n", path)
 	}
-	fmt.Println("\nNext: edit instructions.md and score.sh, then run `ar run`.")
+	fmt.Println("\nNext: edit instructions.md and score.sh, then run `karp run`.")
 	return nil
 }
 

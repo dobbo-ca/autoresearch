@@ -118,7 +118,7 @@ jobs:
 
           LDFLAGS="-X ${PKG}.Version=${VERSION} -X ${PKG}.Commit=${COMMIT} -X ${PKG}.Date=${BUILD_DATE}"
 
-          OUTPUT="ar-${{ matrix.goos }}-${{ matrix.goarch }}"
+          OUTPUT="karp-${{ matrix.goos }}-${{ matrix.goarch }}"
           go build -ldflags "${LDFLAGS}" -o "${OUTPUT}" ./cmd/ar
 
           echo "Built: ${OUTPUT}"
@@ -128,12 +128,12 @@ jobs:
         run: |
           VERSION="${{ needs.semantic-release.outputs.new_version }}"
 
-          BINARY="ar-${{ matrix.goos }}-${{ matrix.goarch }}"
+          BINARY="karp-${{ matrix.goos }}-${{ matrix.goarch }}"
           ARCHIVE="autoresearch-${VERSION}-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz"
-          # Archive the binary under its installed name, 'ar'.
-          cp "${BINARY}" "ar"
-          tar czf "${ARCHIVE}" "ar"
-          rm "ar"
+          # Archive the binary under its installed name, 'karp'.
+          cp "${BINARY}" "karp"
+          tar czf "${ARCHIVE}" "karp"
+          rm "karp"
 
           # Generate SHA256
           shasum -a 256 "${ARCHIVE}" | awk '{print $1}' > "${ARCHIVE}.sha256"
