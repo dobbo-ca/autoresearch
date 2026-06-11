@@ -138,6 +138,27 @@ func TestEngineDoesNotClobberLedgerOnInterleave(t *testing.T) {
 	}
 }
 
+// Mirrors production wiring: EnsureRepo only (NO manual baseline commit), and the first
+// round regresses. Before the fix this aborted with "git checkout -- .: pathspec ... did
+// not match" because no HEAD existed. EnsureRepo must establish the baseline commit itself.
+func TestEngineFirstRoundRegressionOnFreshRepo(t *testing.T) {
+	dir := t.TempDir()
+	_ = os.WriteFile(filepath.Join(dir, "value.txt"), []byte("4"), 0o644)
+	scoreSh(t, dir)
+	w := workspace.New(dir, []string{"value.txt"}, []string{"score.sh"})
+	if err := w.EnsureRepo(); err != nil {
+		t.Fatal(err)
+	}
+	// Intentionally NO w.Commit("baseline") here — EnsureRepo must establish HEAD.
+	led := ledger.Open(filepath.Join(dir, "rounds.jsonl"))
+	if err := newEngine(dir, w, led, doubleBrain{}, nil, 2).Run(context.Background()); err != nil {
+		t.Fatalf("engine aborted on fresh-repo first-round regression: %v", err)
+	}
+	if got, _ := os.ReadFile(filepath.Join(dir, "value.txt")); string(got) != "4" {
+		t.Fatalf("regression not reverted on fresh repo: %q", got)
+	}
+}
+
 func TestEngineResumesFromLastKept(t *testing.T) {
 	dir, w, led := setupRepo(t, "16")
 	goal := 1.0

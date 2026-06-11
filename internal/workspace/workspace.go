@@ -37,24 +37,39 @@ func (w *Workspace) git(args ...string) (string, error) {
 	return string(out), nil
 }
 
-// EnsureRepo runs `git init` if needed and guarantees .gitignore lists IgnoredPaths.
+// EnsureRepo runs `git init` if needed, guarantees .gitignore lists IgnoredPaths,
+// and guarantees at least one commit exists (a HEAD) so the first reverted round
+// has something to `git checkout`.
 func (w *Workspace) EnsureRepo() error {
 	if _, err := os.Stat(filepath.Join(w.dir, ".git")); err != nil {
 		if _, err := w.git("init", "-q"); err != nil {
 			return err
 		}
-		// Set a fallback identity only if git has none, so commits work on a
-		// machine without a configured user without clobbering an existing one.
-		if out, _ := w.git("config", "user.email"); strings.TrimSpace(out) == "" {
-			if _, err := w.git("config", "user.email", "autoresearch@localhost"); err != nil {
-				return err
-			}
-			if _, err := w.git("config", "user.name", "autoresearch"); err != nil {
-				return err
-			}
+	}
+	if err := w.ensureGitignore(); err != nil {
+		return err
+	}
+	// If there is no HEAD yet, create a baseline commit of the current tree so that
+	// RevertAsset (git checkout) works from round 1 on a freshly-initialized project.
+	if _, err := w.git("rev-parse", "--verify", "-q", "HEAD"); err != nil {
+		w.ensureIdentity()
+		if _, err := w.git("add", "-A"); err != nil {
+			return err
+		}
+		if _, err := w.git("commit", "-q", "-m", "autoresearch baseline"); err != nil {
+			return err
 		}
 	}
-	return w.ensureGitignore()
+	return nil
+}
+
+// ensureIdentity sets a fallback git identity only when none is configured, so commits
+// work on a machine without a global identity without clobbering an existing one.
+func (w *Workspace) ensureIdentity() {
+	if out, _ := w.git("config", "user.email"); strings.TrimSpace(out) == "" {
+		_, _ = w.git("config", "user.email", "autoresearch@localhost")
+		_, _ = w.git("config", "user.name", "autoresearch")
+	}
 }
 
 func (w *Workspace) ensureGitignore() error {
@@ -149,10 +164,14 @@ func (w *Workspace) Diffstat() string {
 	return strings.TrimSpace(out)
 }
 
-// Commit stages everything (respecting .gitignore) and commits with msg.
+// Commit stages everything (respecting .gitignore) and commits with msg. It is a no-op
+// when there is nothing staged to commit (e.g. a redundant baseline commit).
 func (w *Workspace) Commit(msg string) error {
 	if _, err := w.git("add", "-A"); err != nil {
 		return err
+	}
+	if _, err := w.git("diff", "--cached", "--quiet"); err == nil {
+		return nil // nothing staged
 	}
 	_, err := w.git("commit", "-q", "-m", msg)
 	return err
