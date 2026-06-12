@@ -60,12 +60,7 @@ Rules:
 	b.WriteString("# Instructions (locked, human-authored)\n")
 	b.WriteString(in.Instructions)
 	b.WriteString("\n\n# Current asset files\n")
-	paths := make([]string, 0, len(in.Asset))
-	for p := range in.Asset {
-		paths = append(paths, p)
-	}
-	sort.Strings(paths)
-	for _, p := range paths {
+	for _, p := range assetOrder(in.Asset, in.History) {
 		fmt.Fprintf(&b, "\n## %s\n```\n%s\n```\n", p, in.Asset[p])
 	}
 	if len(in.History) > 0 {
@@ -81,6 +76,40 @@ Rules:
 	}
 	b.WriteString("\nPropose the next single change now.")
 	return system, b.String()
+}
+
+// assetOrder orders asset paths so the most stable content leads and the most
+// recently changed content trails: files are sorted by the round in which each was
+// last KEPT (ascending; never-kept files first, sub-sorted by path), so the
+// just-changed file lands last. Rendering it last keeps the leading prefix
+// (system + instructions + unchanged assets) byte-identical round-over-round, so
+// llama-server reuses its prompt KV-cache and only re-prefills the changed file.
+//
+// Keying off the last KEPT round (not the last targeted file) matters twice: a
+// REVERTED round changes no content, so it must not reorder; and ordering ALL files
+// by kept-recency (rather than just moving one file last) keeps the others' relative
+// order stable when the kept target changes between rounds, preserving more prefix.
+func assetOrder(asset map[string]string, history []RoundSummary) []string {
+	// lastKept[path] = the most recent round in which this file was the kept target.
+	lastKept := make(map[string]int, len(asset))
+	for _, h := range history {
+		if h.Kept {
+			if _, ok := asset[h.TargetFile]; ok {
+				lastKept[h.TargetFile] = h.Round
+			}
+		}
+	}
+	paths := make([]string, 0, len(asset))
+	for p := range asset {
+		paths = append(paths, p)
+	}
+	sort.Slice(paths, func(i, j int) bool {
+		if ri, rj := lastKept[paths[i]], lastKept[paths[j]]; ri != rj {
+			return ri < rj
+		}
+		return paths[i] < paths[j]
+	})
+	return paths
 }
 
 // Grammar returns a GBNF grammar that constrains output to the Proposal JSON shape.
