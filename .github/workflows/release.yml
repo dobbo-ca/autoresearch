@@ -51,6 +51,10 @@ jobs:
           echo "current=$BEFORE_TAG next=$NEXT"
 
           if [ -n "$NEXT" ] && [ "$NEXT" != "$BEFORE_TAG" ]; then
+            # annotated tags need a committer identity (lightweight tags don't,
+            # but annotated carry tagger/date metadata for the release).
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
             git tag -a "$NEXT" -m "$NEXT"
             git push origin "refs/tags/$NEXT"
             echo "new_version=$NEXT" >> $GITHUB_OUTPUT
