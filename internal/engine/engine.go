@@ -26,8 +26,16 @@ type Engine struct {
 	History      int      // rounds of history shown to the model
 	LogsDir      string   // per-round scorer logs
 	Now          func() time.Time
+	Clock        func() time.Time // measures model-call latency; defaults to time.Now
 	RunScorer    func(ctx context.Context) scorer.Result
 	Log          func(string) // optional progress sink
+}
+
+func (e *Engine) clock() time.Time {
+	if e.Clock != nil {
+		return e.Clock()
+	}
+	return time.Now()
 }
 
 // Better reports whether a improves on b for the given direction.
@@ -75,20 +83,22 @@ func (e *Engine) Run(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
+		modelStart := e.clock()
 		prop, err := e.Brain.Propose(ctx, brain.ProposeInput{
 			Instructions: e.Instructions,
 			Asset:        asset,
 			History:      e.recentHistory(recs),
 			Direction:    e.Direction,
 		})
+		modelMS := e.clock().Sub(modelStart).Milliseconds()
 		if err != nil {
 			e.logf("round %d: propose failed: %v", round, err)
-			recs = e.record(recs, ledger.Record{Round: round, TS: e.ts(), Hypothesis: "(propose failed)", Kept: false, ScoreBefore: prevBaseline, ScoreAfter: prevBaseline})
+			recs = e.record(recs, ledger.Record{Round: round, TS: e.ts(), Hypothesis: "(propose failed)", Kept: false, ScoreBefore: prevBaseline, ScoreAfter: prevBaseline, ModelMS: modelMS})
 			continue
 		}
 		if !e.Workspace.Allowed(prop.TargetFile) {
 			e.logf("round %d: rejected target %q (locked/outside asset)", round, prop.TargetFile)
-			recs = e.record(recs, ledger.Record{Round: round, TS: e.ts(), Hypothesis: prop.Hypothesis, TargetFile: prop.TargetFile, Kept: false, ScoreBefore: prevBaseline, ScoreAfter: prevBaseline})
+			recs = e.record(recs, ledger.Record{Round: round, TS: e.ts(), Hypothesis: prop.Hypothesis, TargetFile: prop.TargetFile, Kept: false, ScoreBefore: prevBaseline, ScoreAfter: prevBaseline, ModelMS: modelMS})
 			continue
 		}
 		if err := e.Workspace.Apply(prop.TargetFile, prop.NewContent); err != nil {
@@ -118,7 +128,7 @@ func (e *Engine) Run(ctx context.Context) error {
 		recs = e.record(recs, ledger.Record{
 			Round: round, TS: e.ts(), Hypothesis: prop.Hypothesis, TargetFile: prop.TargetFile,
 			ScoreBefore: prevBaseline, ScoreAfter: after, Kept: kept,
-			ScorerExit: res.ExitCode, LogsPath: logsPath, Diffstat: diffstat,
+			ScorerExit: res.ExitCode, LogsPath: logsPath, Diffstat: diffstat, ModelMS: modelMS,
 		})
 	}
 }

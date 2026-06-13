@@ -21,6 +21,7 @@ type Record struct {
 	ScorerExit  int     `json:"scorer_exit"`
 	LogsPath    string  `json:"logs_path"`
 	Diffstat    string  `json:"diffstat"`
+	ModelMS     int64   `json:"model_ms,omitempty"` // wall-clock ms spent in the model's Propose call
 }
 
 type Ledger struct{ path string }

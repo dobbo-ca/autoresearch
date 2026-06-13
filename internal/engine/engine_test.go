@@ -159,6 +159,74 @@ func TestEngineFirstRoundRegressionOnFreshRepo(t *testing.T) {
 	}
 }
 
+// TestEngineRecordsModelLatency covers acceptance item 3's instrumentation: each
+// round records the wall-clock time spent in the model's Propose call, so an A/B
+// before/after the prompt reorder is measurable from rounds.jsonl.
+func TestEngineRecordsModelLatency(t *testing.T) {
+	dir, w, led := setupRepo(t, "16")
+	e := newEngine(dir, w, led, halveBrain{}, nil, 1)
+	base := time.Unix(100, 0)
+	times := []time.Time{base, base.Add(250 * time.Millisecond)}
+	i := 0
+	e.Clock = func() time.Time {
+		tt := times[i]
+		i++
+		return tt
+	}
+	if err := e.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	recs, _ := led.All()
+	var got int64 = -1
+	for _, r := range recs {
+		if r.Round == 1 {
+			got = r.ModelMS
+		}
+	}
+	if got != 250 {
+		t.Fatalf("round 1 ModelMS = %d, want 250", got)
+	}
+}
+
+type lockedTargetBrain struct{}
+
+func (lockedTargetBrain) Close() error { return nil }
+func (lockedTargetBrain) Propose(_ context.Context, _ brain.ProposeInput) (brain.Proposal, error) {
+	return brain.Proposal{Hypothesis: "edit locked", TargetFile: "score.sh", NewContent: "x"}, nil
+}
+
+// TestEngineRecordsModelLatencyOnRejectedTarget covers acceptance item 3 for the
+// rejected-target path: the model call still consumed time, so the round record
+// must carry ModelMS even when the proposed target is locked/outside the asset set.
+func TestEngineRecordsModelLatencyOnRejectedTarget(t *testing.T) {
+	dir, w, led := setupRepo(t, "16")
+	e := newEngine(dir, w, led, lockedTargetBrain{}, nil, 1)
+	base := time.Unix(100, 0)
+	times := []time.Time{base, base.Add(250 * time.Millisecond)}
+	i := 0
+	e.Clock = func() time.Time {
+		tt := times[i]
+		i++
+		return tt
+	}
+	if err := e.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	recs, _ := led.All()
+	var got int64 = -1
+	for _, r := range recs {
+		if r.Round == 1 {
+			got = r.ModelMS
+			if r.Kept {
+				t.Fatalf("round 1 should be rejected, not kept")
+			}
+		}
+	}
+	if got != 250 {
+		t.Fatalf("rejected round ModelMS = %d, want 250", got)
+	}
+}
+
 func TestEngineResumesFromLastKept(t *testing.T) {
 	dir, w, led := setupRepo(t, "16")
 	goal := 1.0
