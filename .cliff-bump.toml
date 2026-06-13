@@ -1,0 +1,23 @@
+# Release-gating config used ONLY by `git cliff --bumped-version` in release.yml.
+# Decoupled from .cliff.toml (which renders the full changelog) so internal commit
+# types still appear in release notes but never, on their own, cut a release.
+#
+# Releasing types: feat -> minor, fix/perf/revert -> patch, any `!`/BREAKING -> major.
+# To let another type cut a release, remove its `skip = true` line below.
+[git]
+conventional_commits = true
+filter_unconventional = true
+commit_parsers = [
+  { message = "^feat", group = "feat" },
+  { message = "^fix", group = "fix" },
+  { message = "^perf", group = "perf" },
+  { message = "^revert", group = "revert" },
+  { message = "^docs", skip = true },
+  { message = "^style", skip = true },
+  { message = "^refactor", skip = true },
+  { message = "^test", skip = true },
+  { message = "^chore", skip = true },
+  { message = "^ci", skip = true },
+  { message = "^build", skip = true },
+  { message = ".*", skip = true },
+]
