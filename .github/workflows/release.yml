@@ -64,25 +64,9 @@ jobs:
             echo "version_changed=false" >> $GITHUB_OUTPUT
           fi
 
-      - name: Generate Changelog
-        if: steps.bump.outputs.version_changed == 'true'
-        uses: orhun/git-cliff-action@v4
-        with:
-          config: .cliff.toml
-          args: --verbose --current
-        env:
-          OUTPUT: CHANGELOG.md
-          GITHUB_REPO: ${{ github.repository }}
-          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
-
-      - name: Commit Changelog
-        if: steps.bump.outputs.version_changed == 'true'
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add CHANGELOG.md
-          git commit -m "docs: update changelog for ${{ steps.bump.outputs.new_version }}" || echo "No changes to commit"
-          git push origin main || echo "No changes to push"
+      # Release notes are NOT committed to the repo: branch protection rejects a bot
+      # push to main, and the notes are only needed for the GitHub Release. They are
+      # generated on demand from the tag in the `release` job below.
 
   build:
     needs: semantic-release
@@ -163,6 +147,19 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Fetch Tags
+        run: git fetch --tags --force
+
+      - name: Install git-cliff
+        uses: taiki-e/install-action@v2
+        with:
+          tool: git-cliff@2.13.1
+
+      - name: Generate Release Notes
+        run: git cliff --config .cliff.toml --latest --strip header -o RELEASE_NOTES.md
 
       - name: Download All Artifacts
         uses: actions/download-artifact@v4
@@ -180,7 +177,7 @@ jobs:
         with:
           tag_name: ${{ needs.semantic-release.outputs.new_version }}
           name: ${{ needs.semantic-release.outputs.new_version }}
-          body_path: CHANGELOG.md
+          body_path: RELEASE_NOTES.md
           files: release-assets/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
