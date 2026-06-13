@@ -19,8 +19,8 @@ jobs:
   semantic-release:
     runs-on: ubuntu-latest
     outputs:
-      new_version: ${{ steps.uplift.outputs.new_version }}
-      version_changed: ${{ steps.uplift.outputs.version_changed }}
+      new_version: ${{ steps.bump.outputs.new_version }}
+      version_changed: ${{ steps.bump.outputs.version_changed }}
     steps:
       - name: Generate GitHub App Token
         id: app-token
@@ -35,22 +35,25 @@ jobs:
           fetch-depth: 0
           token: ${{ steps.app-token.outputs.token }}
 
-      - name: Setup Uplift
-        uses: gembaadvantage/uplift-action@v2
+      - name: Install git-cliff
+        uses: taiki-e/install-action@v2
         with:
-          version: latest
-          install-only: true
-          args: version
+          tool: git-cliff@2.13.1
 
-      - name: Run Uplift
-        id: uplift
+      - name: Determine version and tag
+        id: bump
         run: |
           BEFORE_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
-          uplift release --fetch-all --skip-changelog
-          AFTER_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+          # .cliff-bump.toml gates which commit types cut a release (feat/fix/perf/
+          # revert/breaking). Internal types (docs, chore, ci, ...) are skipped, so a
+          # release of only those resolves to the current version => no bump.
+          NEXT=$(git cliff --config .cliff-bump.toml --bumped-version 2>/dev/null || echo "")
+          echo "current=$BEFORE_TAG next=$NEXT"
 
-          if [ -n "$AFTER_TAG" ] && [ "$AFTER_TAG" != "$BEFORE_TAG" ]; then
-            echo "new_version=$AFTER_TAG" >> $GITHUB_OUTPUT
+          if [ -n "$NEXT" ] && [ "$NEXT" != "$BEFORE_TAG" ]; then
+            git tag -a "$NEXT" -m "$NEXT"
+            git push origin "refs/tags/$NEXT"
+            echo "new_version=$NEXT" >> $GITHUB_OUTPUT
             echo "version_changed=true" >> $GITHUB_OUTPUT
           else
             echo "No version change, skipping release"
@@ -58,7 +61,7 @@ jobs:
           fi
 
       - name: Generate Changelog
-        if: steps.uplift.outputs.version_changed == 'true'
+        if: steps.bump.outputs.version_changed == 'true'
         uses: orhun/git-cliff-action@v4
         with:
           config: .cliff.toml
@@ -69,12 +72,12 @@ jobs:
           GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
 
       - name: Commit Changelog
-        if: steps.uplift.outputs.version_changed == 'true'
+        if: steps.bump.outputs.version_changed == 'true'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add CHANGELOG.md
-          git commit -m "docs: update changelog for ${{ steps.uplift.outputs.new_version }}" || echo "No changes to commit"
+          git commit -m "docs: update changelog for ${{ steps.bump.outputs.new_version }}" || echo "No changes to commit"
           git push origin main || echo "No changes to push"
 
   build:
